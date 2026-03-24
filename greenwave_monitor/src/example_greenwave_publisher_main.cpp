@@ -15,13 +15,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "minimal_publisher_node.hpp"
+#include "example_greenwave_publisher_node.hpp"
 
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  rclcpp::NodeOptions options;
-  auto node = std::make_shared<MinimalPublisher>(options);
+  auto node = std::make_shared<ExampleGreenwavePublisherNode>();
   try {
     rclcpp::spin(node);
   } catch (const rclcpp::exceptions::RCLError & e) {

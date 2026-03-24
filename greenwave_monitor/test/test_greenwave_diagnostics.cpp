@@ -64,9 +64,10 @@ protected:
 
 TEST_F(GreenwaveDiagnosticsTest, FrameRateMsgTest)
 {
-  // Initialize GreenwaveDiagnostics
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.has_msg_timestamp = true;
   greenwave_diagnostics::GreenwaveDiagnostics greenwave_diagnostics(
-    *node_, "test_topic", greenwave_diagnostics::GreenwaveDiagnosticsConfig());
+    *node_, "test_topic", config);
 
   uint64_t timestamp = test_constants::kStartTimestampNs;  // in nanoseconds
   for (int i = 0; i < 1000; i++) {
@@ -105,9 +106,11 @@ TEST_F(GreenwaveDiagnosticsTest, FrameRateNodeTest)
 
 TEST_F(GreenwaveDiagnosticsTest, MessageLatencyTest)
 {
-  // Initialize GreenwaveDiagnostics
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
+  config.has_msg_timestamp = true;
   greenwave_diagnostics::GreenwaveDiagnostics greenwave_diagnostics(
-    *node_, "test_topic", greenwave_diagnostics::GreenwaveDiagnosticsConfig());
+    *node_, "test_topic", config);
 
   const rclcpp::Time current_time = node_->get_clock()->now();
   // Make message timestamp a certain amount of time earlier than current time
@@ -129,12 +132,12 @@ TEST_F(GreenwaveDiagnosticsTest, DiagnosticPublishSubscribeTest)
   const int64_t interarrival_time_ns = static_cast<int64_t>(
     ::greenwave_diagnostics::constants::kSecondsToNanoseconds / input_frequency);
 
-  // Initialize GreenwaveDiagnostics with diagnostics enabled
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.enable_msg_time_diagnostics = true;
   config.enable_node_time_diagnostics = true;
+  config.enable_fps_jitter_msg_time_diagnostics = true;
   config.enable_increasing_msg_time_diagnostics = true;
-  // in us
+  config.has_msg_timestamp = true;
   config.expected_dt_us = interarrival_time_ns /
     ::greenwave_diagnostics::constants::kMicrosecondsToNanoseconds;
 
@@ -275,4 +278,174 @@ TEST_F(GreenwaveDiagnosticsTest, DiagnosticPublishSubscribeTest)
 
   EXPECT_GE(diagnostics_values["total_dropped_frames"], 1.0);
   EXPECT_GE(diagnostics_values["num_non_increasing_msg"], 1.0);
+}
+
+static diagnostic_msgs::msg::DiagnosticStatus run_fps_sequence(
+  const std::shared_ptr<rclcpp::Node> & node,
+  const greenwave_diagnostics::GreenwaveDiagnosticsConfig & config,
+  double expected_hz,
+  double tolerance_percent,
+  double actual_hz)
+{
+  greenwave_diagnostics::GreenwaveDiagnostics diagnostics(*node, "test_topic", config);
+  diagnostics.setExpectedDt(expected_hz, tolerance_percent);
+  std::vector<diagnostic_msgs::msg::DiagnosticArray::SharedPtr> received_diagnostics;
+  const auto diagnostic_subscription =
+    node->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+    "/diagnostics", 10,
+    [&received_diagnostics](const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg) {
+      received_diagnostics.push_back(msg);
+    });
+  (void)diagnostic_subscription;
+
+  constexpr int samples = 15;
+  const int64_t input_dt_ns = static_cast<int64_t>(
+    1e9 / expected_hz);
+  const auto sleep_duration = std::chrono::duration<double>(1.0 / actual_hz);
+  uint64_t msg_timestamp = test_constants::kStartTimestampNs;
+  for (int i = 0; i < samples; ++i) {
+    diagnostics.updateDiagnostics(msg_timestamp);
+    diagnostics.publishDiagnostics();
+    rclcpp::spin_some(node);
+    msg_timestamp += static_cast<uint64_t>(input_dt_ns);
+    std::this_thread::sleep_for(sleep_duration);
+  }
+
+  if (received_diagnostics.empty() || received_diagnostics.back()->status.empty()) {
+    diagnostic_msgs::msg::DiagnosticStatus empty_status;
+    empty_status.level = diagnostic_msgs::msg::DiagnosticStatus::STALE;
+    return empty_status;
+  }
+
+  return received_diagnostics.back()->status[0];
+}
+
+TEST_F(GreenwaveDiagnosticsTest, HeaderlessFallbackRaisesOutOfRangeFpsError)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  config.has_msg_timestamp = false;
+
+  const auto status = run_fps_sequence(node_, config, 100.0, 10.0, 40.0);
+
+  EXPECT_EQ(status.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
+  EXPECT_NE(status.message.find("FPS OUT OF RANGE (NODE TIME)"), std::string::npos);
+}
+
+TEST_F(GreenwaveDiagnosticsTest, HeaderOnlyDoesNotUseFallbackForHeaderlessTopics)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
+  config.has_msg_timestamp = false;
+
+  const auto status = run_fps_sequence(node_, config, 100.0, 10.0, 40.0);
+
+  EXPECT_EQ(status.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
+  EXPECT_EQ(status.message, "OK");
+}
+
+TEST_F(GreenwaveDiagnosticsTest, FallbackModeDoesNotUseFpsWindowForHeaderedTopics)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  config.has_msg_timestamp = true;
+
+  const auto status = run_fps_sequence(node_, config, 100.0, 10.0, 100.0);
+
+  EXPECT_EQ(status.level, diagnostic_msgs::msg::DiagnosticStatus::OK);
+  EXPECT_EQ(status.message, "OK");
+}
+
+TEST_F(GreenwaveDiagnosticsTest, NodetimeOnlyUsesFpsWindowForHeaderedTopics)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::NodetimeOnly;
+  config.has_msg_timestamp = true;
+
+  const auto status = run_fps_sequence(node_, config, 100.0, 10.0, 40.0);
+
+  EXPECT_EQ(status.level, diagnostic_msgs::msg::DiagnosticStatus::ERROR);
+  EXPECT_NE(status.message.find("FPS OUT OF RANGE (NODE TIME)"), std::string::npos);
+}
+
+TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetNone)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::None;
+  config.applyTimeCheckPreset();
+  EXPECT_FALSE(config.enable_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_increasing_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_increasing_node_time_diagnostics);
+  EXPECT_FALSE(config.fallback_to_nodetime);
+}
+
+TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetHeaderOnly)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
+  config.applyTimeCheckPreset();
+  EXPECT_FALSE(config.enable_node_time_diagnostics);
+  EXPECT_TRUE(config.enable_msg_time_diagnostics);
+  EXPECT_TRUE(config.enable_fps_jitter_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_node_time_diagnostics);
+  EXPECT_TRUE(config.enable_increasing_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_increasing_node_time_diagnostics);
+  EXPECT_FALSE(config.fallback_to_nodetime);
+}
+
+TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetNodetimeOnly)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::NodetimeOnly;
+  config.applyTimeCheckPreset();
+  EXPECT_TRUE(config.enable_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_msg_time_diagnostics);
+  EXPECT_TRUE(config.enable_fps_window_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_increasing_msg_time_diagnostics);
+  EXPECT_TRUE(config.enable_increasing_node_time_diagnostics);
+  EXPECT_FALSE(config.fallback_to_nodetime);
+}
+
+TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetHeaderWithFallbackNoMsgTimestamp)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  config.has_msg_timestamp = false;
+  config.applyTimeCheckPreset();
+  EXPECT_TRUE(config.fallback_to_nodetime);
+  EXPECT_TRUE(config.enable_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);
+  EXPECT_TRUE(config.enable_fps_window_node_time_diagnostics);
+  EXPECT_TRUE(config.enable_increasing_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_increasing_msg_time_diagnostics);
+}
+
+TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetHeaderWithFallbackWithMsgTimestamp)
+{
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  config.has_msg_timestamp = true;
+  config.applyTimeCheckPreset();
+  EXPECT_TRUE(config.fallback_to_nodetime);
+  EXPECT_TRUE(config.enable_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_node_time_diagnostics);
+  EXPECT_TRUE(config.enable_increasing_node_time_diagnostics);
+  EXPECT_TRUE(config.enable_msg_time_diagnostics);
+  EXPECT_TRUE(config.enable_fps_jitter_msg_time_diagnostics);
+  EXPECT_FALSE(config.enable_fps_window_msg_time_diagnostics);
+  EXPECT_TRUE(config.enable_increasing_msg_time_diagnostics);
 }

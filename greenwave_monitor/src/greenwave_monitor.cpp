@@ -27,6 +27,31 @@
 
 using namespace std::chrono_literals;
 
+namespace
+{
+
+constexpr const char * kTimestampModeHeaderWithFallback = "header_with_nodetime_fallback";
+constexpr const char * kTimestampModeHeaderOnly = "header_only";
+constexpr const char * kTimestampModeNodetimeOnly = "nodetime_only";
+constexpr const char * kTimestampModeNone = "none";
+constexpr const char * kTimeCheckPresetsParam = "gw_time_check_preset";
+
+greenwave_diagnostics::TimeCheckPreset timeCheckPresetFromString(const std::string & s)
+{
+  if (s == kTimestampModeHeaderOnly) {
+    return greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
+  }
+  if (s == kTimestampModeNodetimeOnly) {
+    return greenwave_diagnostics::TimeCheckPreset::NodetimeOnly;
+  }
+  if (s == kTimestampModeHeaderWithFallback) {
+    return greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  }
+  return greenwave_diagnostics::TimeCheckPreset::None;
+}
+
+}  // namespace
+
 namespace greenwave_monitor
 {
 namespace constants
@@ -48,9 +73,39 @@ GreenwaveMonitor::GreenwaveMonitor(const rclcpp::NodeOptions & options)
   if (!this->has_parameter("gw_monitored_topics")) {
     this->declare_parameter<std::vector<std::string>>("gw_monitored_topics", {""});
   }
+  if (!this->has_parameter(kTimeCheckPresetsParam)) {
+    this->declare_parameter<std::string>(
+      kTimeCheckPresetsParam, kTimestampModeHeaderWithFallback);
+  }
+  std::string time_check_preset_str = this->get_parameter(kTimeCheckPresetsParam).as_string();
+  time_check_preset_ = timeCheckPresetFromString(time_check_preset_str);
+  // Give a warning if the time check preset has an invalid string and use the default
+  if (time_check_preset_ == greenwave_diagnostics::TimeCheckPreset::None &&
+    time_check_preset_str != kTimestampModeNone)
+  {
+    RCLCPP_WARN(
+      this->get_logger(), "Invalid time check preset '%s', using default '%s'. Valid presets are: "
+      "%s, %s, %s, %s",
+      time_check_preset_str.c_str(), kTimestampModeHeaderWithFallback,
+      kTimestampModeHeaderWithFallback, kTimestampModeHeaderOnly, kTimestampModeNodetimeOnly,
+      kTimestampModeNone);
+    time_check_preset_ = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  } else if (time_check_preset_ != greenwave_diagnostics::TimeCheckPreset::None) {
+    RCLCPP_INFO(
+      this->get_logger(), "Using time check preset '%s'",
+      time_check_preset_str.c_str());
+  }
 
   timer_ = this->create_wall_timer(
     1s, std::bind(&GreenwaveMonitor::timer_callback, this));
+
+  // Subscribe to /diagnostics early so we can detect external publishers before
+  // deferred_init() adds topics. This gives us the best chance of catching
+  // externally-published diagnostics before add_topic() is called.
+  diagnostics_subscription_ =
+    this->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+    "/diagnostics", 10,
+    std::bind(&GreenwaveMonitor::diagnostics_callback, this, std::placeholders::_1));
 
   // Defer topic discovery to allow the ROS graph to settle before querying other nodes
   init_timer_ = this->create_wall_timer(
@@ -121,6 +176,19 @@ void GreenwaveMonitor::timer_callback()
       topic.c_str(), diagnostics->getLatency());
   }
   RCLCPP_INFO(this->get_logger(), "====================================================");
+}
+
+void GreenwaveMonitor::diagnostics_callback(
+  const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+  for (const auto & status : msg->status) {
+    // Only track topic names that are not already monitored by us. This prevents
+    // our own published diagnostics from blocking re-adds after a remove_topic().
+    if (greenwave_diagnostics_.find(status.name) == greenwave_diagnostics_.end()) {
+      externally_diagnosed_topics_.insert(status.name);
+    }
+  }
 }
 
 void GreenwaveMonitor::handle_manage_topic(
@@ -272,6 +340,20 @@ bool GreenwaveMonitor::has_header_from_type(const std::string & type_name)
 bool GreenwaveMonitor::add_topic(
   const std::string & topic, std::string & message, int max_retries, double retry_wait_s)
 {
+  // Check if an external node is already publishing diagnostics for this topic.
+  // Adding a duplicate would create redundant and potentially conflicting diagnostics.
+  {
+    std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+    if (externally_diagnosed_topics_.count(topic) > 0) {
+      message = "Topic is externally monitored";
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Refusing to add topic '%s': topic is externally monitored",
+        topic.c_str());
+      return false;
+    }
+  }
+
   // Check if topic already exists
   if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
     message = "Topic already being monitored";
@@ -290,6 +372,8 @@ bool GreenwaveMonitor::add_topic(
   const std::string type = maybe_type.value();
   greenwave_diagnostics::GreenwaveDiagnosticsConfig diagnostics_config;
   diagnostics_config.enable_all_topic_diagnostics = true;
+  diagnostics_config.time_check_preset = time_check_preset_;
+  diagnostics_config.has_msg_timestamp = has_header_from_type(type);
 
   greenwave_diagnostics_.emplace(
     topic,
@@ -328,6 +412,18 @@ bool GreenwaveMonitor::add_topic(
 
 bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & message)
 {
+  {
+    std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+    if (externally_diagnosed_topics_.count(topic) > 0) {
+      message = "Topic is externally monitored";
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Refusing to remove topic '%s': topic is externally monitored",
+        topic.c_str());
+      return false;
+    }
+  }
+
   auto diag_it = greenwave_diagnostics_.find(topic);
   if (diag_it == greenwave_diagnostics_.end()) {
     message = "Topic not found";

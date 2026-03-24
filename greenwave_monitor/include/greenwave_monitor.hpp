@@ -20,7 +20,9 @@
 #include <chrono>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -48,6 +50,9 @@ public:
     if (init_timer_) {
       init_timer_->cancel();
     }
+    // Reset diagnostics subscription before clearing internal state to prevent
+    // callbacks from firing after greenwave_diagnostics_ is destroyed
+    diagnostics_subscription_.reset();
     // Clear diagnostics before base Node destructor runs to avoid accessing invalid node state
     greenwave_diagnostics_.clear();
     subscriptions_.clear();
@@ -88,6 +93,8 @@ private:
 
   void add_topics_from_parameters();
 
+  void diagnostics_callback(const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg);
+
   std::map<std::string,
     std::unique_ptr<greenwave_diagnostics::GreenwaveDiagnostics>> greenwave_diagnostics_;
   std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
@@ -97,4 +104,9 @@ private:
     manage_topic_service_;
   rclcpp::Service<greenwave_monitor_interfaces::srv::SetExpectedFrequency>::SharedPtr
     set_expected_frequency_service_;
+  greenwave_diagnostics::TimeCheckPreset time_check_preset_;
+  rclcpp::Subscription<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr
+    diagnostics_subscription_;
+  std::set<std::string> externally_diagnosed_topics_;
+  std::mutex externally_diagnosed_topics_mutex_;
 };
