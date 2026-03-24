@@ -187,25 +187,29 @@ def curses_main(stdscr, node):
         FRAME_RATE_WIDTH = 16
         REALTIME_DELAY_WIDTH = 16
         STATUS_WIDTH = 18
+        MESSAGE_WIDTH = 28
         BUTTON_WIDTH = 10
 
         total_width_needed = (
             MAX_NAME_WIDTH + 2 * FRAME_RATE_WIDTH + REALTIME_DELAY_WIDTH +
-            STATUS_WIDTH + BUTTON_WIDTH + 5)
+            STATUS_WIDTH + MESSAGE_WIDTH + BUTTON_WIDTH + 5)
         if total_width_needed > width:
             scaling_factor = width / total_width_needed
             MAX_NAME_WIDTH = int(MAX_NAME_WIDTH * scaling_factor)
             FRAME_RATE_WIDTH = int(FRAME_RATE_WIDTH * scaling_factor)
             REALTIME_DELAY_WIDTH = int(REALTIME_DELAY_WIDTH * scaling_factor)
             STATUS_WIDTH = int(STATUS_WIDTH * scaling_factor)
+            MESSAGE_WIDTH = int(MESSAGE_WIDTH * scaling_factor)
 
         # Draw header
         header = (f'{"Topic Name":<{MAX_NAME_WIDTH}} {"Status":<{STATUS_WIDTH}} '
                   f'{"Pub Rate (Hz)":<{FRAME_RATE_WIDTH}} '
-                  f'{"Latency (ms)":<{REALTIME_DELAY_WIDTH}} {"Expected Hz":<12}')
+                  f'{"Latency (ms)":<{REALTIME_DELAY_WIDTH}} {"Expected Hz":<12} '
+                  f'{"Message":<{MESSAGE_WIDTH}}')
         separator_width = min(
             width - BUTTON_WIDTH - 2,
-            MAX_NAME_WIDTH + FRAME_RATE_WIDTH + REALTIME_DELAY_WIDTH + STATUS_WIDTH + 12 + 4)
+            MAX_NAME_WIDTH + FRAME_RATE_WIDTH + REALTIME_DELAY_WIDTH + STATUS_WIDTH +
+            12 + MESSAGE_WIDTH + 4)
         separator = '-' * separator_width
 
         try:
@@ -324,6 +328,7 @@ def curses_main(stdscr, node):
             current_delay_from_realtime_ms = 'N/A'.ljust(REALTIME_DELAY_WIDTH)
             expected_freq_display = '-'.ljust(12)
 
+            status_text_display = '-'.ljust(MESSAGE_WIDTH)
             if node.ui_adaptor:
                 diag = node.ui_adaptor.get_topic_diagnostics(topic_name)
                 if diag.status != '-':
@@ -334,6 +339,11 @@ def curses_main(stdscr, node):
                     current_delay_from_realtime_ms = (
                         diag.latency.ljust(REALTIME_DELAY_WIDTH)
                         if diag.latency != '-' else 'N/A'.ljust(REALTIME_DELAY_WIDTH))
+                    if getattr(diag, 'status_text', '-') != '-':
+                        raw = diag.status_text
+                        status_text_display = (raw[:MESSAGE_WIDTH-3] + '...'
+                                                if len(raw) > MESSAGE_WIDTH
+                                                else raw.ljust(MESSAGE_WIDTH))
 
                 # Get expected frequency
                 expected_hz, tolerance = node.ui_adaptor.get_expected_frequency(topic_name)
@@ -365,7 +375,7 @@ def curses_main(stdscr, node):
 
             # Build display line
             line = f'{name_display} {status_display} {frame_rate_node}'
-            line += f' {current_delay_from_realtime_ms} {expected_freq_display}'
+            line += f' {current_delay_from_realtime_ms} {expected_freq_display} {status_text_display}'
             line = line[:width - BUTTON_WIDTH - 3]
 
             try:

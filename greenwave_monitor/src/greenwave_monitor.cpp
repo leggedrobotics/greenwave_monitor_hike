@@ -288,23 +288,39 @@ bool GreenwaveMonitor::add_topic(
   }
 
   const std::string type = maybe_type.value();
-  auto sub = this->create_generic_subscription(
-    topic,
-    type,
-    rclcpp::QoS(
-      rclcpp::KeepLast(10), rmw_qos_profile_sensor_data),
-    [this, topic, type](std::shared_ptr<rclcpp::SerializedMessage> msg) {
-      this->topic_callback(msg, topic, type);
-    });
-
   greenwave_diagnostics::GreenwaveDiagnosticsConfig diagnostics_config;
   diagnostics_config.enable_all_topic_diagnostics = true;
 
-  subscriptions_.push_back(sub);
   greenwave_diagnostics_.emplace(
     topic,
     std::make_unique<greenwave_diagnostics::GreenwaveDiagnostics>(
       *this, topic, diagnostics_config));
+
+  const bool is_string_topic = (type == "std_msgs/msg/String");
+  if (is_string_topic) {
+    auto string_sub = this->create_subscription<std_msgs::msg::String>(
+      topic,
+      rclcpp::QoS(rclcpp::KeepLast(10), rmw_qos_profile_sensor_data),
+      [this, topic](std::shared_ptr<std_msgs::msg::String> msg) {
+        auto & diag = greenwave_diagnostics_[topic];
+        if (diag) {
+          const uint64_t ts_ns = this->get_clock()->now().nanoseconds();
+          diag->updateDiagnostics(ts_ns);
+          diag->setLastStatusText(msg->data);
+        }
+      });
+    subscriptions_.push_back(string_sub);
+  } else {
+    auto sub = this->create_generic_subscription(
+      topic,
+      type,
+      rclcpp::QoS(
+        rclcpp::KeepLast(10), rmw_qos_profile_sensor_data),
+      [this, topic, type](std::shared_ptr<rclcpp::SerializedMessage> msg) {
+        this->topic_callback(msg, topic, type);
+      });
+    subscriptions_.push_back(sub);
+  }
 
   message = "Successfully added topic";
   return true;

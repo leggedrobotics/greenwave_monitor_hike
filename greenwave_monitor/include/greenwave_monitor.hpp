@@ -90,7 +90,7 @@ private:
 
   std::map<std::string,
     std::unique_ptr<greenwave_diagnostics::GreenwaveDiagnostics>> greenwave_diagnostics_;
-  std::vector<std::shared_ptr<rclcpp::GenericSubscription>> subscriptions_;
+  std::vector<rclcpp::SubscriptionBase::SharedPtr> subscriptions_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr init_timer_;
   rclcpp::Service<greenwave_monitor_interfaces::srv::ManageTopic>::SharedPtr

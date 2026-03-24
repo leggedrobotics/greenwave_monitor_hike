@@ -240,6 +240,12 @@ public:
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("tolerance")
         .value(std::to_string(tolerance_)));
+      if (!last_status_text_.empty()) {
+        values.push_back(
+          diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
+          .key("status_text")
+          .value(last_status_text_));
+      }
     }
     status_vec_[0].values = values;
 
@@ -320,6 +326,13 @@ public:
 
     expected_frequency_ = 0.0;
     tolerance_ = 0.0;
+  }
+
+  /** Set optional status/message text (e.g. for std_msgs/String topics). Shown in UI. */
+  void setLastStatusText(const std::string & text)
+  {
+    const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
+    last_status_text_ = text;
   }
 
 private:
@@ -507,6 +520,7 @@ private:
 
   double expected_frequency_{0.0};
   double tolerance_{0.0};
+  std::string last_status_text_;
 };
 
 }  // namespace greenwave_diagnostics

@@ -63,6 +63,7 @@ class UiDiagnosticData:
     msg_rate: str = '-'
     latency: str = '-'
     status: str = '-'
+    status_text: str = '-'  # Last message content (e.g. for std_msgs/String status topics)
     last_update: float = 0.0
 
     @classmethod
@@ -91,6 +92,8 @@ class UiDiagnosticData:
                 data.expected_frequency = kv.value
             elif kv.key == 'tolerance':
                 data.tolerance = kv.value
+            elif kv.key == 'status_text':
+                data.status_text = kv.value
         return data
 
 
