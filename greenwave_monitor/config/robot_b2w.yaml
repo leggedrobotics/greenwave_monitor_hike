@@ -19,16 +19,29 @@
 greenwave_monitor:
   ros__parameters:
     gw_frequency_monitored_topics:
+      ###
       # --- Local navigation (always active) ---
-
+      ###
+      # IMU (PC2)
+      /imu_sensor_broadcaster/imu:
+        expected_frequency: 400.0
+        tolerance: 10.0        
       # DLIO odometry (PC3)
       /dlio/odom_node/odom:
-        expected_frequency: 100.0
+        expected_frequency: 400.0
         tolerance: 10.0
       # Lidar point cloud (PC3)
       /lidar/point_cloud:
         expected_frequency: 10.0
         tolerance: 1.0
+      # ZED depth (PC6)
+      /zed/zed_node/depth/depth_registered:
+        expected_frequency: 15.0
+        tolerance: 1.0
+      # ZED rgb (PC6)
+      /zed/zed_node/rgb/color/rect/image:
+        expected_frequency: 15.0
+        tolerance: 1.0        
       # ZED semantic segmentation (PC6)
       /zed/zed_node/rgb/lmm_nav_sem:
         expected_frequency: 5.0
@@ -36,17 +49,17 @@ greenwave_monitor:
       # Path manager velocity (PC6)
       /path_manager/path_manager_ros/nav_vel:
         expected_frequency: 5.0
-        tolerance: 0.5
-      # Planner status (1 Hz)
+        tolerance: 1.0
+      # Planner status (PC6)
       /rl_sem_nav_controller/status:
         expected_frequency: 1.0
-        tolerance: 0.2
-
+        tolerance: 1.0
+      ###      
       # --- Global navigation (stale in local mode) ---
-
+      ###     
       # Holistic fusion / graph MSF (PC4)
       /graph_msf/est_odometry_odom_imu:
-        expected_frequency: 100.0
+        expected_frequency: 400.0
         tolerance: 10.0
       # SwiftNav GNSS (PC3)
       /navsatfix:
@@ -63,3 +76,7 @@ greenwave_monitor:
       /lodia/global_path_manager_state:
         expected_frequency: 1.0
         tolerance: 0.2
+      # ZED VIO (PC6)
+      /zed/zed_node/odom:
+        expected_frequency: 30.0
+        tolerance: 10.0   
