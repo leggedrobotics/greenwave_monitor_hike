@@ -14,13 +14,13 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
-# B2W robot configuration for greenwave_monitor (local mode)
-# Topics and expected frequencies for the overview terminal (ncurses_dashboard)
+# B2W robot configuration for greenwave_monitor
 
 greenwave_monitor:
   ros__parameters:
-    gw_monitored_topics: []
     gw_frequency_monitored_topics:
+      # --- Local navigation (always active) ---
+
       # DLIO odometry (PC3)
       /dlio/odom_node/odom:
         expected_frequency: 100.0
@@ -39,5 +39,27 @@ greenwave_monitor:
         tolerance: 0.5
       # Planner status (1 Hz)
       /rl_sem_nav_controller/status:
+        expected_frequency: 1.0
+        tolerance: 0.2
+
+      # --- Global navigation (stale in local mode) ---
+
+      # Holistic fusion / graph MSF (PC4)
+      /graph_msf/est_odometry_odom_imu:
+        expected_frequency: 100.0
+        tolerance: 10.0
+      # SwiftNav GNSS (PC3)
+      /navsatfix:
+        expected_frequency: 100.0
+        tolerance: 10.0
+      # Global planner goals (PC3)
+      /goal:
+        expected_frequency: 0.2
+        tolerance: 0.05
+      /goal_continuous:
+        expected_frequency: 1.0
+        tolerance: 0.2
+      # Global path manager state
+      /lodia/global_path_manager_state:
         expected_frequency: 1.0
         tolerance: 0.2
